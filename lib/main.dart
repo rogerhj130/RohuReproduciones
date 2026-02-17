@@ -6,8 +6,13 @@ import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart'; // Librería de anuncios
 
-void main() => runApp(const MyApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  MobileAds.instance.initialize(); // Inicializa Google Ads al arrancar
+  runApp(const MyApp());
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -30,11 +35,36 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   Map<String, List<String>> _publicPlaylists = {};
+  BannerAd? _bannerAd;
+  bool _isBannerLoaded = false;
+
+  // ESTE ES TU CÓDIGO DE BANNER (EL QUE TIENE LA BARRA /)
+  final String _adUnitId = 'ca-app-pub-3059778872079066/3138343100'; 
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _loadBanner();
+  }
+
+  void _loadBanner() {
+    _bannerAd = BannerAd(
+      adUnitId: _adUnitId,
+      size: AdSize.banner,
+      request: const AdRequest(),
+      listener: BannerAdListener(
+        onAdLoaded: (ad) {
+          setState(() {
+            _isBannerLoaded = true;
+          });
+        },
+        onAdFailedToLoad: (ad, error) {
+          ad.dispose();
+          print('Error al cargar el banner: $error');
+        },
+      ),
+    )..load();
   }
 
   Future<void> _loadData() async {
@@ -90,40 +120,60 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("RohuReproducciones")),
-      body: _publicPlaylists.isEmpty
-          ? const Center(child: Text("Presiona + para crear una carpeta"))
-          : ListView(
-              children: _publicPlaylists.keys.map((name) => ListTile(
-                leading: const Icon(Icons.folder, color: Colors.amber),
-                title: Text(name),
-                subtitle: Text("${_publicPlaylists[name]!.length} videos"),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () {
-                    setState(() => _publicPlaylists.remove(name));
-                    _saveData();
-                  },
-                ),
-                onTap: () => Navigator.push(context, MaterialPageRoute(
-                  builder: (context) => PlaylistDetailScreen(
-                    name: name, 
-                    videoPaths: _publicPlaylists[name]!, 
-                    onUpdate: (newList) {
-                      setState(() => _publicPlaylists[name] = newList);
-                      _saveData();
-                    },
-                  )
-                )),
-              )).toList(),
+      body: Column(
+        children: [
+          Expanded(
+            child: _publicPlaylists.isEmpty
+                ? const Center(child: Text("Presiona + para crear una carpeta"))
+                : ListView(
+                    children: _publicPlaylists.keys.map((name) => ListTile(
+                      leading: const Icon(Icons.folder, color: Colors.amber),
+                      title: Text(name),
+                      subtitle: Text("${_publicPlaylists[name]!.length} videos"),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () {
+                          setState(() => _publicPlaylists.remove(name));
+                          _saveData();
+                        },
+                      ),
+                      onTap: () => Navigator.push(context, MaterialPageRoute(
+                        builder: (context) => PlaylistDetailScreen(
+                          name: name, 
+                          videoPaths: _publicPlaylists[name]!, 
+                          onUpdate: (newList) {
+                            setState(() => _publicPlaylists[name] = newList);
+                            _saveData();
+                          },
+                        )
+                      )),
+                    )).toList(),
+                  ),
+          ),
+          // AQUÍ SE MUESTRA EL BANNER SI CARGÓ CORRECTAMENTE
+          if (_isBannerLoaded && _bannerAd != null)
+            SizedBox(
+              width: _bannerAd!.size.width.toDouble(),
+              height: _bannerAd!.size.height.toDouble(),
+              child: AdWidget(ad: _bannerAd!),
             ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: _createNewFolder,
         child: const Icon(Icons.create_new_folder),
       ),
     );
   }
+
+  @override
+  void dispose() {
+    _bannerAd?.dispose();
+    super.dispose();
+  }
 }
 
+// --- CLASE DETALLE (REORDENAR Y AGREGAR) ---
 class PlaylistDetailScreen extends StatefulWidget {
   final String name;
   final List<String> videoPaths;
@@ -176,6 +226,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   }
 }
 
+// --- REPRODUCTOR (CON WAKELOCK Y BLOQUEO) ---
 class VideoPlayerScreen extends StatefulWidget {
   final List<String> playlist;
   final int initialIndex;
@@ -188,7 +239,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   late VideoPlayerController _videoController;
   ChewieController? _chewieController;
   late int _currentIndex;
-  bool _isLocked = false; // ESTADO DE BLOQUEO
+  bool _isLocked = false;
 
   @override
   void initState() {
@@ -211,11 +262,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       autoPlay: true,
       looping: false,
       fullScreenByDefault: true,
-      // Si está bloqueado, ocultamos los controles de Chewie
       showControls: !_isLocked, 
       allowFullScreen: true,
     );
-    
     _videoController.addListener(() {
       if (_videoController.value.position >= _videoController.value.duration) _nextVideo();
     });
@@ -243,37 +292,29 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Capa del Video
           Center(
             child: _chewieController != null 
                 ? Chewie(controller: _chewieController!) 
                 : const CircularProgressIndicator(),
           ),
-          
-          // CAPA DE BLOQUEO (Botón flotante transparente/invisible cuando está bloqueado)
           if (_isLocked)
             Positioned(
               top: 40,
               right: 20,
               child: GestureDetector(
-                onLongPress: () { // Desbloqueo con presión larga para evitar errores
+                onDoubleTap: () {
                   setState(() {
                     _isLocked = false;
                     _setupChewie();
                   });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Controles Desbloqueados"), duration: Duration(seconds: 1)),
-                  );
                 },
                 child: Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                  decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
                   child: const Icon(Icons.lock_outline, color: Colors.white, size: 30),
                 ),
               ),
             ),
-
-          // BOTÓN PARA BLOQUEAR (Solo visible si NO está bloqueado)
           if (!_isLocked && _chewieController != null)
             Positioned(
               top: 40,
@@ -285,9 +326,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     _isLocked = true;
                     _setupChewie();
                   });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Pantalla Bloqueada"), duration: Duration(seconds: 1)),
-                  );
                 },
               ),
             ),
