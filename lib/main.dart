@@ -1,16 +1,18 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math'; // Para el modo aleatorio
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:google_mobile_ads/google_mobile_ads.dart'; // Librería de anuncios
+import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  MobileAds.instance.initialize(); // Inicializa Google Ads al arrancar
+  MobileAds.instance.initialize();
   runApp(const MyApp());
 }
 
@@ -37,8 +39,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, List<String>> _publicPlaylists = {};
   BannerAd? _bannerAd;
   bool _isBannerLoaded = false;
-
-  // ESTE ES TU CÓDIGO DE BANNER (EL QUE TIENE LA BARRA /)
   final String _adUnitId = 'ca-app-pub-3059778872079066/3138343100'; 
 
   @override
@@ -54,15 +54,8 @@ class _HomeScreenState extends State<HomeScreen> {
       size: AdSize.banner,
       request: const AdRequest(),
       listener: BannerAdListener(
-        onAdLoaded: (ad) {
-          setState(() {
-            _isBannerLoaded = true;
-          });
-        },
-        onAdFailedToLoad: (ad, error) {
-          ad.dispose();
-          print('Error al cargar el banner: $error');
-        },
+        onAdLoaded: (ad) => setState(() => _isBannerLoaded = true),
+        onAdFailedToLoad: (ad, error) { ad.dispose(); },
       ),
     )..load();
   }
@@ -89,28 +82,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _createNewFolder() {
-    TextEditingController _controller = TextEditingController();
+    TextEditingController controller = TextEditingController();
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("Nueva Carpeta"),
-        content: TextField(
-          controller: _controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: "Nombre de la lista"),
-        ),
+        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(hintText: "Nombre de la lista")),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
-          TextButton(
-            onPressed: () {
-              if (_controller.text.isNotEmpty) {
-                setState(() => _publicPlaylists[_controller.text] = []);
-                _saveData();
-                Navigator.pop(context);
-              }
-            },
-            child: const Text("Crear"),
-          ),
+          TextButton(onPressed: () {
+            if (controller.text.isNotEmpty) {
+              setState(() => _publicPlaylists[controller.text] = []);
+              _saveData();
+              Navigator.pop(context);
+            }
+          }, child: const Text("Crear")),
         ],
       ),
     );
@@ -130,50 +116,31 @@ class _HomeScreenState extends State<HomeScreen> {
                       leading: const Icon(Icons.folder, color: Colors.amber),
                       title: Text(name),
                       subtitle: Text("${_publicPlaylists[name]!.length} videos"),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () {
-                          setState(() => _publicPlaylists.remove(name));
-                          _saveData();
-                        },
-                      ),
+                      trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () {
+                        setState(() => _publicPlaylists.remove(name));
+                        _saveData();
+                      }),
                       onTap: () => Navigator.push(context, MaterialPageRoute(
                         builder: (context) => PlaylistDetailScreen(
-                          name: name, 
-                          videoPaths: _publicPlaylists[name]!, 
-                          onUpdate: (newList) {
-                            setState(() => _publicPlaylists[name] = newList);
-                            _saveData();
-                          },
+                          name: name, videoPaths: _publicPlaylists[name]!, 
+                          onUpdate: (newList) { setState(() => _publicPlaylists[name] = newList); _saveData(); },
                         )
                       )),
                     )).toList(),
                   ),
           ),
-          // AQUÍ SE MUESTRA EL BANNER SI CARGÓ CORRECTAMENTE
           if (_isBannerLoaded && _bannerAd != null)
-            SizedBox(
-              width: _bannerAd!.size.width.toDouble(),
-              height: _bannerAd!.size.height.toDouble(),
-              child: AdWidget(ad: _bannerAd!),
-            ),
+            SizedBox(width: _bannerAd!.size.width.toDouble(), height: _bannerAd!.size.height.toDouble(), child: AdWidget(ad: _bannerAd!)),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _createNewFolder,
-        child: const Icon(Icons.create_new_folder),
-      ),
+      floatingActionButton: FloatingActionButton(onPressed: _createNewFolder, child: const Icon(Icons.create_new_folder)),
     );
   }
 
   @override
-  void dispose() {
-    _bannerAd?.dispose();
-    super.dispose();
-  }
+  void dispose() { _bannerAd?.dispose(); super.dispose(); }
 }
 
-// --- CLASE DETALLE (REORDENAR Y AGREGAR) ---
 class PlaylistDetailScreen extends StatefulWidget {
   final String name;
   final List<String> videoPaths;
@@ -226,7 +193,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   }
 }
 
-// --- REPRODUCTOR (CON WAKELOCK Y BLOQUEO) ---
 class VideoPlayerScreen extends StatefulWidget {
   final List<String> playlist;
   final int initialIndex;
@@ -240,11 +206,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   ChewieController? _chewieController;
   late int _currentIndex;
   bool _isLocked = false;
+  bool _isShuffle = false;
+  bool _isLoopOne = false;
 
   @override
   void initState() {
     super.initState();
     WakelockPlus.enable();
+    // BLOQUEAR EL CELULAR EN HORIZONTAL AL ENTRAR
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     _currentIndex = widget.initialIndex;
     _initPlayer();
   }
@@ -260,24 +233,45 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _chewieController = ChewieController(
       videoPlayerController: _videoController,
       autoPlay: true,
-      looping: false,
-      fullScreenByDefault: true,
-      showControls: !_isLocked, 
-      allowFullScreen: true,
+      looping: _isLoopOne,
+      showControls: false, // Usamos nuestros controles propios
+      allowFullScreen: false,
     );
     _videoController.addListener(() {
-      if (_videoController.value.position >= _videoController.value.duration) _nextVideo();
+      if (_videoController.value.position >= _videoController.value.duration && !_isLoopOne) {
+        _nextVideo();
+      }
     });
   }
 
   void _nextVideo() {
-    if (_currentIndex < widget.playlist.length - 1) {
-      _currentIndex++;
-      _refresh();
-    } else {
-      _currentIndex = 0;
-      _refresh();
-    }
+    setState(() {
+      if (_isShuffle) {
+        _currentIndex = Random().nextInt(widget.playlist.length);
+      } else if (_currentIndex < widget.playlist.length - 1) {
+        _currentIndex++;
+      } else {
+        _currentIndex = 0;
+      }
+    });
+    _refresh();
+  }
+
+  void _previousVideo() {
+    setState(() {
+      if (_currentIndex > 0) {
+        _currentIndex--;
+      } else {
+        _currentIndex = widget.playlist.length - 1;
+      }
+    });
+    _refresh();
+  }
+
+  // ADELANTAR O ATRASAR 10 SEGUNDOS
+  void _seekRelative(int seconds) {
+    final newPosition = _videoController.value.position + Duration(seconds: seconds);
+    _videoController.seekTo(newPosition);
   }
 
   void _refresh() {
@@ -290,46 +284,124 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
+      endDrawer: _buildSideList(),
       body: Stack(
         children: [
+          // VIDEO A PANTALLA COMPLETA
           Center(
             child: _chewieController != null 
-                ? Chewie(controller: _chewieController!) 
+                ? AspectRatio(
+                    aspectRatio: _videoController.value.aspectRatio,
+                    child: Chewie(controller: _chewieController!),
+                  )
                 : const CircularProgressIndicator(),
           ),
-          if (_isLocked)
+          
+          // CAPA DE CONTROLES
+          if (!_isLocked) ...[
+            // BOTÓN DE LISTA (Superior Derecha)
             Positioned(
-              top: 40,
-              right: 20,
-              child: GestureDetector(
-                onDoubleTap: () {
-                  setState(() {
-                    _isLocked = false;
-                    _setupChewie();
-                  });
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                  child: const Icon(Icons.lock_outline, color: Colors.white, size: 30),
-                ),
+              top: 20,
+              right: 80,
+              child: Builder(builder: (context) => IconButton(
+                icon: const Icon(Icons.list, size: 35, color: Colors.white),
+                onPressed: () => Scaffold.of(context).openEndDrawer(),
+              )),
+            ),
+
+            // CONTROLES PRINCIPALES (Centro Inferior)
+            Positioned(
+              bottom: 30,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // ALEATORIO
+                  IconButton(
+                    icon: Icon(_isShuffle ? Icons.shuffle_on : Icons.shuffle),
+                    onPressed: () => setState(() => _isShuffle = !_isShuffle),
+                  ),
+                  const SizedBox(width: 20),
+                  // ATRASAR (Toque simple: anterior | Toque largo: -10 seg)
+                  GestureDetector(
+                    onTap: _previousVideo,
+                    onLongPress: () => _seekRelative(-10),
+                    child: const Icon(Icons.skip_previous, size: 50, color: Colors.white),
+                  ),
+                  const SizedBox(width: 30),
+                  // PLAY / PAUSE
+                  IconButton(
+                    icon: Icon(
+                      _videoController.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                      size: 70,
+                      color: Colors.white,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _videoController.value.isPlaying ? _videoController.pause() : _videoController.play();
+                      });
+                    },
+                  ),
+                  const SizedBox(width: 30),
+                  // ADELANTAR (Toque simple: siguiente | Toque largo: +10 seg)
+                  GestureDetector(
+                    onTap: _nextVideo,
+                    onLongPress: () => _seekRelative(10),
+                    child: const Icon(Icons.skip_next, size: 50, color: Colors.white),
+                  ),
+                  const SizedBox(width: 20),
+                  // REPETIR
+                  IconButton(
+                    icon: Icon(_isLoopOne ? Icons.repeat_one_on : Icons.repeat_one),
+                    onPressed: () {
+                      setState(() { _isLoopOne = !_isLoopOne; _setupChewie(); });
+                    },
+                  ),
+                ],
               ),
             ),
-          if (!_isLocked && _chewieController != null)
-            Positioned(
-              top: 40,
-              right: 20,
-              child: IconButton(
-                icon: const Icon(Icons.lock_open, color: Colors.white, size: 30),
-                onPressed: () {
-                  setState(() {
-                    _isLocked = true;
-                    _setupChewie();
-                  });
-                },
+          ],
+
+          // BOTÓN DE BLOQUEO (CANDADO)
+          Positioned(
+            top: 20,
+            right: 20,
+            child: GestureDetector(
+              onDoubleTap: () {
+                setState(() {
+                  _isLocked = !_isLocked;
+                  _setupChewie();
+                });
+              },
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                child: Icon(_isLocked ? Icons.lock : Icons.lock_open, color: Colors.white, size: 30),
               ),
             ),
+          ),
         ],
+      ),
+    );
+  }
+
+  // LISTA LATERAL
+  Widget _buildSideList() {
+    return Drawer(
+      width: 300,
+      backgroundColor: Colors.black87,
+      child: ListView.builder(
+        itemCount: widget.playlist.length,
+        itemBuilder: (context, index) => ListTile(
+          selected: _currentIndex == index,
+          title: Text(widget.playlist[index].split('/').last, style: const TextStyle(color: Colors.white)),
+          onTap: () {
+            setState(() => _currentIndex = index);
+            _refresh();
+            Navigator.pop(context);
+          },
+        ),
       ),
     );
   }
@@ -337,6 +409,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void dispose() {
     WakelockPlus.disable();
+    // IMPORTANTE: Devolver la rotación normal al salir del video
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
     _videoController.dispose();
     _chewieController?.dispose();
     super.dispose();
